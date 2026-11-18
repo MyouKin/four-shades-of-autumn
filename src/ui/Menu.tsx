@@ -9,6 +9,7 @@ import {
   Check,
   Flag,
 } from "lucide-react";
+import { GAME_NAME_EN, GAME_NAME_ZH } from "../branding";
 import { CIVILIZATIONS, DEFAULT_OPTIONS, OPENING_PROFILES } from "../game";
 import { generateMap } from "../game/map/generate";
 import type { GameOptions, MapSettings, Tile } from "../game/types";
@@ -46,18 +47,14 @@ export function MainMenu({
         <header className="menu-top">
           <div className="brand-small">
             <AutumnMark />
-            <span>FOUR SHADES OF AUTUMN</span>
+            <span lang="en">{GAME_NAME_EN}</span>
           </div>
           <span className="edition">v0.3.1</span>
         </header>
         <section className="menu-copy">
           <h1>
-            秋四色
-            <span>
-              Four Shades
-              <br />
-              of Autumn
-            </span>
+            {GAME_NAME_ZH}
+            <span lang="en">{GAME_NAME_EN}</span>
           </h1>
           <nav className="menu-actions">
             <button
@@ -570,7 +567,9 @@ export function About({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="关于" onClose={onClose}>
       <div className="about-body">
-        <h3>秋四色 / Four Shades of Autumn</h3>
+        <h3>
+          {GAME_NAME_ZH} · <span lang="en">{GAME_NAME_EN}</span>
+        </h3>
         <p>
           离线回合制策略游戏原型。标准科技、单位、城市和战斗规则参考 The Battle
           of Polytopia 的公开资料。

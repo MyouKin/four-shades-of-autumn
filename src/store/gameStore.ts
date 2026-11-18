@@ -19,9 +19,13 @@ const defaultSettings: Settings = {
 };
 function readSettings(): Settings {
   try {
+    const saved = JSON.parse(
+      localStorage.getItem(SETTINGS_KEY) || "{}",
+    ) as Partial<Settings>;
     return {
-      ...defaultSettings,
-      ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"),
+      sound: saved.sound ?? defaultSettings.sound,
+      reducedMotion: saved.reducedMotion ?? defaultSettings.reducedMotion,
+      showHints: saved.showHints ?? defaultSettings.showHints,
     };
   } catch {
     return defaultSettings;

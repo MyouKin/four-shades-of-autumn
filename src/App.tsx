@@ -4,6 +4,7 @@ import {
   createGame,
   DEFAULT_OPTIONS,
   getAttackTargets,
+  getPendingUpgradeCity,
   isUnitVisible,
   validateAction,
   getReachableTiles,
@@ -41,6 +42,7 @@ export default function App() {
   const [panel, setPanel] = useState<Panel>(null),
     [target, setTarget] = useState<string | null>(null),
     [dismissedResult, setDismissedResult] = useState<string | null>(null);
+  const [selectionRequest, setSelectionRequest] = useState(0);
   const [systemReducedMotion, setSystemReducedMotion] = useState(
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
@@ -90,7 +92,23 @@ export default function App() {
         : [],
     [game, selectedUnit, busy],
   );
+  const pendingUpgrade = game?.status === "playing" && game.currentPlayer === 0 && !busy
+    ? getPendingUpgradeCity(game)
+    : undefined;
+  function openActionTile(
+    tileId: number,
+    kind: "upgrade" | "capture",
+    unitId?: string,
+  ) {
+    select(tileId, kind === "capture" ? unitId : null);
+    setTarget(null);
+    setSelectionRequest((request) => request + 1);
+  }
   function perform(action: Action) {
+    if (action.type === "END_TURN" && pendingUpgrade && game) {
+      openActionTile(pendingUpgrade.y * game.options.size + pendingUpgrade.x, "upgrade");
+      return;
+    }
     if (command(action) && settings.sound)
       playSound(
         action.type === "MOVE"
@@ -190,6 +208,7 @@ export default function App() {
           reachable={screen === "game" ? reachable : []}
           attackTargets={screen === "game" ? attackTargets : []}
           onTileClick={clickTile}
+          onActionBadge={openActionTile}
           resetKey={resetKey}
           reducedMotion={reducedMotion}
           preview={screen === "menu"}
@@ -204,6 +223,8 @@ export default function App() {
         game && (
           <>
             <GameHUD
+              selectionRequest={selectionRequest}
+              upgradePending={!!pendingUpgrade}
               game={game}
               onCommand={perform}
               onTech={() => setPanel("tech")}

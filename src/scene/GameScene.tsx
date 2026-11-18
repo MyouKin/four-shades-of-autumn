@@ -1,5 +1,7 @@
 import {
   Component,
+  createContext,
+  useContext,
   Suspense,
   memo,
   useEffect,
@@ -16,6 +18,8 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { City, GameEvent, GameState, Tile } from "../game/types";
 import { getVisibleResource } from "../game";
 import { usePresentedUnits, useUnitMotion } from "./unitMotion";
+import { getMapBadges, MapBadgeButtons, MapBadgePositions } from "./ActionBadges";
+import type { MapBadgesProps, OpenBadge } from "./ActionBadges";
 import { easeInOut, getFreshEvents } from "./motion";
 import type { PresentedUnit } from "./motion";
 
@@ -39,6 +43,7 @@ export interface GameSceneProps {
   reachable: number[];
   attackTargets: string[];
   onTileClick: (id: number) => void;
+  onActionBadge?: OpenBadge;
   resetKey: number;
   reducedMotion?: boolean;
   preview?: boolean;
@@ -176,30 +181,34 @@ function CameraRig({
   return null;
 }
 
+const defaultLabelStyle = {
+  font: '"PingFang SC", "Microsoft YaHei", sans-serif',
+  size: 14,
+};
+const MapLabelStyle = createContext(defaultLabelStyle);
+
 function createLabel(
   text: string,
   foreground: string,
   background: string,
-  fontSize: number,
-  width: number,
-  height: number,
+  style: typeof defaultLabelStyle,
 ) {
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
   const ctx = canvas.getContext("2d")!;
-  ctx.clearRect(0, 0, width, height);
-  if (background !== "transparent") {
-    ctx.fillStyle = background;
-    ctx.beginPath();
-    ctx.roundRect(3, 3, width - 6, height - 6, (height - 6) / 2);
-    ctx.fill();
-  }
-  ctx.font = `600 ${fontSize}px "PingFang SC", "Microsoft YaHei", sans-serif`;
+  // Rasterize at twice the display resolution so high-DPI labels remain sharp.
+  const font = `600 ${style.size * 2}px ${style.font}`;
+  ctx.font = font;
+  canvas.width = Math.ceil(ctx.measureText(text).width) + 20;
+  canvas.height = (style.size + 8) * 2;
+  ctx.fillStyle = background;
+  ctx.beginPath();
+  ctx.roundRect(1, 1, canvas.width - 2, canvas.height - 2, 11);
+  ctx.fill();
+  ctx.font = font;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = foreground;
-  ctx.fillText(text, width / 2, height / 2 + 1);
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
@@ -210,36 +219,37 @@ function Label({
   color = "#243c42",
   background = "#f5f0e3f2",
   position,
-  scale = 1,
+  alwaysVisible = false,
   opacity = 1,
 }: {
   text: string;
   color?: string;
   background?: string;
   position: [number, number, number];
-  scale?: number;
+  alwaysVisible?: boolean;
   opacity?: number;
 }) {
+  const style = useContext(MapLabelStyle);
+  const sprite = useRef<THREE.Sprite>(null);
   const texture = useMemo(
-    () =>
-      createLabel(
-        text,
-        color,
-        background,
-        26,
-        Math.max(96, text.length * 29 + 32),
-        48,
-      ),
-    [text, color, background],
+    () => createLabel(text, color, background, style),
+    [text, color, background, style],
   );
   useEffect(() => () => texture.dispose(), [texture]);
-  const ratio = texture.image.width / texture.image.height;
+  useFrame(({ camera, size }) => {
+    if (!sprite.current || !(camera instanceof THREE.OrthographicCamera)) return;
+    const pixelsPerTile = (camera.zoom * size.height) / (camera.top - camera.bottom);
+    // At overview zoom, hide details rather than covering the tiles with labels.
+    sprite.current.visible = alwaysVisible || pixelsPerTile >= 26;
+    const worldPerPixel = 1 / pixelsPerTile;
+    sprite.current.scale.set(
+      (texture.image.width / 2) * worldPerPixel,
+      (texture.image.height / 2) * worldPerPixel,
+      1,
+    );
+  });
   return (
-    <sprite
-      position={position}
-      scale={[0.34 * ratio * scale, 0.34 * scale, 1]}
-      renderOrder={10}
-    >
+    <sprite ref={sprite} position={position} renderOrder={alwaysVisible ? 11 : 10}>
       <spriteMaterial
         map={texture}
         transparent
@@ -595,7 +605,6 @@ const CityLabel = memo(function CityLabel({
           terrainHeight(tile) + 0.03,
           city.y - offset + 0.58,
         ]}
-        scale={1.05}
         color={city.owner === null ? "#59645c" : "#243c42"}
         opacity={visible ? 1 : 0.8}
       />
@@ -690,7 +699,6 @@ function AnimatedUnit({
           color={unit.hp <= unit.maxHp * 0.4 ? "#914c3e" : "#243c42"}
           background="#f5f0e3f2"
           position={[0, unit.type === "giant" ? 1.14 : 0.84, 0]}
-          scale={0.7}
         />
       )}
       {!cue.dying && unit.owner === 0 && !unit.moved && !unit.attacked && (
@@ -891,7 +899,7 @@ function EventEffect({
           position={[0, 0, 0]}
           color={accent}
           background="#f5f0e3f2"
-          scale={event.type === "attack" ? 1.2 : 1.05}
+          alwaysVisible
         />
       </group>
     </group>
@@ -1046,7 +1054,9 @@ function World({
   resetKey,
   reducedMotion = false,
   preview = false,
-}: GameSceneProps) {
+  badges,
+  badgeButtons,
+}: GameSceneProps & MapBadgesProps) {
   const [hoveredTile, setHoveredTile] = useState<number | null>(null);
   const offset = (game.options.size - 1) / 2;
   const explored = useMemo(
@@ -1151,6 +1161,11 @@ function World({
         preview={preview}
         selectedTile={selectedTile}
         reducedMotion={reducedMotion}
+      />
+      <MapBadgePositions
+        badges={badges}
+        badgeButtons={badgeButtons}
+        renderedIds={renderedIds}
       />
       <ambientLight intensity={0.65} color="#f5f0e3" />
       <hemisphereLight args={["#dbe6df", "#677c72", 0.9]} />
@@ -1291,6 +1306,24 @@ class SceneBoundary extends Component<
 }
 
 export default function GameScene(props: GameSceneProps) {
+  const [labelStyle, setLabelStyle] = useState(defaultLabelStyle);
+  useEffect(() => {
+    if (!document.fonts) return;
+    let active = true;
+    const css = getComputedStyle(document.documentElement);
+    const size = parseFloat(css.getPropertyValue("--font-size-small")) || defaultLabelStyle.size;
+    const font = css.getPropertyValue("--font-body").trim() || defaultLabelStyle.font;
+    document.fonts.load(`600 ${size}px ${font}`, "城市0123").then(
+      () => { if (active) setLabelStyle({ font, size }); },
+      () => { if (active) setLabelStyle({ ...defaultLabelStyle, size }); },
+    );
+    return () => { active = false; };
+  }, []);
+  const badges = useMemo(
+    () => (props.preview ? [] : getMapBadges(props.game)),
+    [props.game, props.preview],
+  );
+  const badgeButtons = useRef(new Map<number, HTMLButtonElement>());
   return (
     <div
       className={`game-scene${props.preview ? " game-scene-preview" : ""}`}
@@ -1321,8 +1354,18 @@ export default function GameScene(props: GameSceneProps) {
               </div>
             }
           >
-            <World {...props} />
+            <MapLabelStyle.Provider value={labelStyle}>
+              <World {...props} badges={badges} badgeButtons={badgeButtons} />
+            </MapLabelStyle.Provider>
           </Canvas>
+          {badges.length > 0 && props.onActionBadge && (
+            <MapBadgeButtons
+              badges={badges}
+              badgeButtons={badgeButtons}
+              onOpen={props.onActionBadge}
+              reducedMotion={props.reducedMotion}
+            />
+          )}
         </Suspense>
       </SceneBoundary>
     </div>

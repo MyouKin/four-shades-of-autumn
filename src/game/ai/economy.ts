@@ -1,13 +1,34 @@
 import { BUILDINGS, TECHNOLOGIES, UNITS } from "../data/config";
 import { distance, isWater, neighbors } from "../map/generate";
 import {
-  canApplyAction, getBuildingLevel, getTechCost, getUpgradeRewards, getVisibleResource,
+  canApplyAction, getBuildingLevel, getPendingUpgradeCity, getTechCost, getUpgradeRewards, getVisibleResource,
 } from "../rules/engine";
 import type { Action, BuildingId, City, GameState, Resource, UnitType } from "../types";
 import { getArmyTarget, type AiProfile } from "./profiles";
 import type { Knowledge, ThreatMap } from "./knowledge";
 
+export function chooseCityReward(s: GameState, city: City, k: Knowledge, threats: ThreatMap, profile: AiProfile): Action {
+  const choices = getUpgradeRewards(city);
+  const danger = threats.cityPressure.get(city.id) ?? 0;
+  let reward = choices[0];
+  if (choices.includes("explore") && profile.coordinated && !danger &&
+    k.known.size < Math.min(s.tiles.length * 0.35, 120)) reward = "explore";
+  if (choices.includes("defense") && profile.coordinated && danger >= 6) reward = "defense";
+  if (choices.includes("territory") && profile.coordinated) {
+    const edgeResources = [...k.known].filter((id) => {
+      const tile = s.tiles[id];
+      return tile.owner === null && distance(tile, city) === 2 && getVisibleResource(s, tile, k.player);
+    });
+    if (edgeResources.length >= 3) reward = "territory";
+  }
+  if (choices.includes("giant") && (s.options.mode === "conquest" || s.options.maxRounds - s.round > 12))
+    reward = "giant";
+  return { type: "CITY_REWARD", cityId: city.id, reward };
+}
+
 export function chooseEconomic(s: GameState, k: Knowledge, threats: ThreatMap, profile: AiProfile): Action | undefined {
+  const pending = getPendingUpgradeCity(s);
+  if (pending) return chooseCityReward(s, pending, k, threats, profile);
   const p = s.players[k.player], normal = profile.coordinated;
   const cities = k.ownCities, units = k.own, armyTarget = getArmyTarget(s);
   const tiles = cities.flatMap((c) => c.territory.map((id) => s.tiles[id]))
@@ -34,24 +55,6 @@ export function chooseEconomic(s: GameState, k: Knowledge, threats: ThreatMap, p
   };
   for (const c of cities) {
     const danger = threats.cityPressure.get(c.id) ?? 0;
-    for (const reward of getUpgradeRewards(c)) {
-      let score = 120;
-      if (reward === "income") score += horizon * 2;
-      if (reward === "explore") score += normal && k.known.size < Math.min(s.tiles.length * 0.35, 120) && !danger ? 20 : -5;
-      if (reward === "resources") score += pressure ? 12 : 6;
-      if (reward === "defense") score += normal && danger >= 6 ? 28 : -8;
-      if (reward === "population") score += 15;
-      if (reward === "territory" && normal) {
-        const edgeResources = [...k.known].filter((id) => {
-          const t = s.tiles[id];
-          return t.owner === null && distance(t, c) === 2 && getVisibleResource(s, t, p.id);
-        }).length;
-        if (edgeResources >= 3) score += 23;
-      }
-      if (reward === "giant") score += s.options.mode === "conquest" || danger ? 30 : 5;
-      if (reward === "park") score += s.options.mode === "score" && remaining <= 12 ? 35 : 0;
-      offer({ type: "CITY_REWARD", cityId: c.id, reward }, score);
-    }
     if (units.length < armyTarget || danger > 3) {
       const nearby = units.filter((u) => distance(u, c) <= 4);
       const enemies = k.enemies.filter((u) => distance(u, c) <= 7);

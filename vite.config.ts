@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { GAME_NAME_ZH, GAME_TITLE } from "./src/branding";
 export default defineConfig({
   base: "./",
   plugins: [
@@ -13,8 +14,8 @@ export default defineConfig({
       includeManifestIcons: false,
       manifest: {
         id: "./",
-        name: "秋四色 · Four Shades of Autumn",
-        short_name: "秋四色",
+        name: GAME_TITLE,
+        short_name: GAME_NAME_ZH,
         description: "单机回合制策略游戏",
         lang: "zh-CN",
         start_url: "./",
@@ -37,7 +38,7 @@ export default defineConfig({
             purpose: "any",
           },
           {
-            src: "icons/maskable-512.png",
+            src: "icons/icon-512.png",
             sizes: "512x512",
             type: "image/png",
             purpose: "maskable",
@@ -47,6 +48,7 @@ export default defineConfig({
       workbox: {
         // Include worker chunks as well as UI chunks. No gameplay request needs a server.
         globPatterns: [
+          "licenses/*-OFL.txt",
           "**/*.{js,css,html,png,svg,ico,json,webmanifest,woff,woff2,wasm,mp3,wav,ogg}",
         ],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,

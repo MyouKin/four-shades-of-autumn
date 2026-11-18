@@ -48,6 +48,7 @@ import {
 import type {
   Action,
   GameState,
+  Position,
   Reward,
   Terrain,
   UnitType,
@@ -103,12 +104,20 @@ const rewards: Record<Reward, [string, string]> = {
   park: ["公园", "增加 250 分"],
   giant: ["巨人", "生成巨人"],
 };
+function describeCityTile(city: Position, tile: Tile) {
+  const eastWest = tile.x === city.x ? "" : tile.x < city.x ? "西" : "东";
+  const northSouth = tile.y === city.y ? "" : tile.y < city.y ? "北" : "南";
+  return `${eastWest}${northSouth}侧 · ${terrainNames[tile.terrain]}`;
+}
+
 const harvestCost = (tile: Tile) => (tile.resource === "starfish" ? 0 : 2);
 function resourceVisible(game: GameState, tile: Tile) {
   return getVisibleResource(game, tile, 0) !== null;
 }
 const seenUnit = (game: GameState, unit: Unit) => isUnitVisible(game, unit, 0);
 interface Props {
+  selectionRequest: number;
+  upgradePending: boolean;
   game: GameState;
   onCommand: (a: Action) => void;
   onTech: () => void;
@@ -120,6 +129,8 @@ interface Props {
   setTarget: (id: string | null) => void;
 }
 export function GameHUD({
+  selectionRequest,
+  upgradePending,
   game,
   onCommand,
   onTech,
@@ -136,14 +147,6 @@ export function GameHUD({
     available = game.units.filter(
       (u) => u.owner === 0 && (!u.moved || !u.attacked),
     );
-  const events = game.events
-    .filter(
-      (e) =>
-        e.player === 0 ||
-        (e.at && player.visible.includes(e.at.y * game.options.size + e.at.x)),
-    )
-    .slice(-2)
-    .reverse();
   return (
     <>
       {aiError && (
@@ -208,14 +211,6 @@ export function GameHUD({
           <span>帮助</span>
         </button>
       </div>
-      <div className="event-feed" aria-live="polite">
-        {events.map((e) => (
-          <div key={e.id}>
-            <span />
-            <p>{e.message}</p>
-          </div>
-        ))}
-      </div>
       {settings.showHints && selectedTile === null && (
         <div className="onboarding-note">
           <Compass size={23} />
@@ -243,7 +238,7 @@ export function GameHUD({
       </div>
       {selectedTile !== null && (
         <SelectionPanel
-          key={`${selectedTile}-${selectedUnit}`}
+          key={`${selectedTile}-${selectedUnit}-${selectionRequest}`}
           game={game}
           selectedTile={selectedTile}
           selectedUnit={selectedUnit}
@@ -261,7 +256,7 @@ export function GameHUD({
           </span>
         )}
         <button
-          className="end-turn"
+          className={`end-turn${upgradePending ? " reward-pending" : ""}`}
           disabled={
             busy || game.status === "finished" || game.currentPlayer !== 0
           }
@@ -271,9 +266,9 @@ export function GameHUD({
           }}
         >
           <span>
-            {busy ? <span className="spinner" /> : <Check size={22} />}
+            {busy ? <span className="spinner" /> : upgradePending ? <ArrowUp size={22} /> : <Check size={22} />}
           </span>
-          <strong>{busy ? "等待对手" : "结束回合"}</strong>
+          <strong>{busy ? "等待对手" : upgradePending ? "选择升级奖励" : "结束回合"}</strong>
           <ArrowRight size={20} />
         </button>
       </div>
@@ -355,7 +350,7 @@ function SelectionPanel({
     </button>
   );
   const tileActions = (t: Tile) => {
-    const actions: { action: Action; label: string; cost: number }[] = [];
+    const actions: { action: Extract<Action, { tileId: number }>; label: string; cost: number }[] = [];
     if (
       t.resource &&
       resourceVisible(game, t) &&
@@ -393,9 +388,6 @@ function SelectionPanel({
                   ? "中立"
                   : game.players[tile.owner].name
               : "未探索"}
-            <span className="coordinates">
-              {tile.x + 1}, {tile.y + 1}
-            </span>
           </span>
           <h2>
             {!explored
@@ -438,6 +430,12 @@ function SelectionPanel({
           <div className="selection-scroll">
             {tab === "unit" && unit ? (
               <>
+                {unit.owner === 0 && city && city.owner !== 0 &&
+                  actionButton(
+                    { type: "CAPTURE", unitId: unit.id },
+                    enabled({ type: "CAPTURE", unitId: unit.id }) ? "占领" : "占领（下一回合）",
+                    Flag,
+                  )}
                 <div className="unit-summary">
                   <span
                     className="unit-badge"
@@ -499,15 +497,7 @@ function SelectionPanel({
                         {attackReady ? "行动可用" : "行动结束"}
                       </span>
                     </div>
-                    {city &&
-                      city.owner !== 0 &&
-                      actionButton(
-                        { type: "CAPTURE", unitId: unit.id },
-                        enabled({ type: "CAPTURE", unitId: unit.id })
-                          ? "占领"
-                          : "占领（下一回合）",
-                        Flag,
-                      )}
+
                     {UNITS[unit.type].skills.includes("infiltrate") &&
                       game.cities
                         .filter(
@@ -590,6 +580,38 @@ function SelectionPanel({
               </>
             ) : city ? (
               <>
+                {city.owner === 0 && city.pendingRewards > 0 && (
+                  <div className="upgrade-rewards">
+                    <h3>
+                      <ArrowUp size={16} />
+                      选择升级奖励
+                      <small>等级 {city.pendingRewardLevels[0]}</small>
+                    </h3>
+                    {getUpgradeRewards(city).map((reward) => (
+                      <button
+                        key={reward}
+                        disabled={
+                          !enabled({
+                            type: "CITY_REWARD",
+                            cityId: city.id,
+                            reward,
+                          })
+                        }
+                        onClick={() =>
+                          onCommand({
+                            type: "CITY_REWARD",
+                            cityId: city.id,
+                            reward,
+                          })
+                        }
+                      >
+                        <strong>{rewards[reward][0]}</strong>
+                        <span>{rewards[reward][1]}</span>
+                        <ChevronRight size={14} />
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <div className="city-overview">
                   <span className="city-level">
                     <Building2 size={23} />
@@ -631,37 +653,6 @@ function SelectionPanel({
                 </div>
                 {city.owner === 0 ? (
                   <>
-                    {city.pendingRewards > 0 && (
-                      <div className="upgrade-rewards">
-                        <h3>
-                          <ArrowUp size={16} />
-                          选择升级奖励
-                        </h3>
-                        {getUpgradeRewards(city).map((reward) => (
-                          <button
-                            key={reward}
-                            disabled={
-                              !enabled({
-                                type: "CITY_REWARD",
-                                cityId: city.id,
-                                reward,
-                              })
-                            }
-                            onClick={() =>
-                              onCommand({
-                                type: "CITY_REWARD",
-                                cityId: city.id,
-                                reward,
-                              })
-                            }
-                          >
-                            <strong>{rewards[reward][0]}</strong>
-                            <span>{rewards[reward][1]}</span>
-                            <ChevronRight size={14} />
-                          </button>
-                        ))}
-                      </div>
-                    )}
                     <h3 className="section-label">
                       训练单位{city.connected && <span>已连接首都</span>}
                     </h3>
@@ -720,9 +711,7 @@ function SelectionPanel({
                             <span>
                               {label}
                               <small>
-                                {"tileId" in action
-                                  ? `${game.tiles[action.tileId].x + 1}, ${game.tiles[action.tileId].y + 1}`
-                                  : ""}
+                                {describeCityTile(city, game.tiles[action.tileId])}
                               </small>
                             </span>
                             <Cost value={cost} />

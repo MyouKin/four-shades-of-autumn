@@ -29,8 +29,7 @@ export function getAiBudget(s: GameState, maxActions?: number): number {
     return Math.min(1600, Math.max(1, Math.floor(maxActions)));
   const units = s.units.filter((u) => u.owner === s.currentPlayer).length;
   const cities = s.cities.filter((c) => c.owner === s.currentPlayer).length;
-  // Enough for movement, combat, skills and a growing economy. The final
-  // END_TURN is outside this budget so exhaustion never strands the match.
+  // Mandatory city rewards and END_TURN have their own bounded settlement.
   return Math.min(1600, Math.max(48, units * 4 + cities * 7 + s.options.size));
 }
 

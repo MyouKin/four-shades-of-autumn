@@ -52,6 +52,8 @@ export const getEmbassyCost = (_s: GameState, _id: number): number => 5;
 export const getUnitMaxHp = (u: Unit): number => u.maxHp;
 export const isAtPeace = (s: GameState, a: number, b: number): boolean =>
   s.players[a].peaceWith.includes(b);
+export const getPendingUpgradeCity = (s: GameState, playerId = s.currentPlayer): City | undefined =>
+  s.cities.find((city) => city.owner === playerId && city.pendingRewardLevels.length > 0);
 export const getUpgradeRewards = (city: City): Reward[] => {
   const level = city.pendingRewardLevels[0];
   return !level
@@ -723,19 +725,20 @@ export function getMovementPath(
   }
   return path.reverse();
 }
+function hasTerrainDefense(p: Player, t: Tile): boolean {
+  return (
+    (t.terrain === "mountain" && hasTech(p, "climbing")) ||
+    (t.terrain === "forest" && hasTech(p, "archery")) ||
+    (isWater(t) && hasTech(p, "aquatism"))
+  );
+}
 export function getTerrainDefense(s: GameState, u: Unit): number {
   const t = tileAt(s, u),
     p = s.players[u.owner],
     c = cityAt(s, u);
   if (c?.owner === u.owner && skill(u, "fortify"))
     return c.defenseBonus ? 4 : 1.5;
-  if (
-    (t.terrain === "mountain" && hasTech(p, "climbing")) ||
-    (t.terrain === "forest" && hasTech(p, "archery")) ||
-    (isWater(t) && hasTech(p, "aquatism"))
-  )
-    return 1.5;
-  return 1;
+  return hasTerrainDefense(p, t) ? 1.5 : 1;
 }
 export function getAttackTargets(s: GameState, id: string): Unit[] {
   const u = s.units.find((u) => u.id === id);
@@ -763,20 +766,28 @@ function combat(
   d: Unit,
 ): { damage: number; retaliation: number } {
   const ad = UNITS[a.type],
-    dd = UNITS[d.type],
-    attack = (ad.attack * a.hp) / a.maxHp,
-    defense = ((dd.defense * d.hp) / d.maxHp) * getTerrainDefense(s, d),
+    dd = UNITS[d.type];
+  // Cancel the common max-HP denominator before division so a true 3.5
+  // cannot become 3.4999999999999996 before rounding a wounded unit's hit.
+  const attack = ad.attack * a.hp * d.maxHp,
+    defense = dd.defense * d.hp * a.maxHp * getTerrainDefense(s, d),
     total = attack + defense;
-  const damage = total ? Math.round((attack / total) * ad.attack * 4.5) : 0;
+  const damage = total ? Math.round((attack * ad.attack * 4.5) / total) : 0;
   const retaliation =
     d.hp > damage &&
     distance(a, d) <= dd.range &&
     !skill(d, "stiff") &&
     !skill(a, "surprise") &&
+    isUnitVisible(s, a, d.owner) &&
     total
-      ? Math.round((defense / total) * dd.defense * 4.5)
+      ? Math.round((defense * dd.defense * 4.5) / total)
       : 0;
   return { damage, retaliation };
+}
+function applyDamage(target: Unit, damage: number): number {
+  const lostHp = Math.min(target.hp, damage);
+  target.hp -= lostHp;
+  return lostHp;
 }
 export function previewCombat(
   s: GameState,
@@ -1158,6 +1169,7 @@ export function validateAction(s: GameState, a: Action): string | null {
         : "大使馆需要外交、5 星，且每势力只能一处。";
     }
     case "END_TURN":
+      return getPendingUpgradeCity(s) ? "请先选完城市升级奖励。" : null;
     case "RESIGN":
       return null;
     default:
@@ -1401,6 +1413,33 @@ function board(_s: GameState, u: Unit, from: Tile, to: Tile): void {
     u.attacked = true;
   }
 }
+function stompAfterMove(s: GameState, u: Unit, previousType: UnitType): void {
+  if (previousType !== "juggernaut" && u.type !== "juggernaut") return;
+  // A landing giant still uses its ship's attack for this impact.
+  const ship = { ...u, type: "juggernaut" as const };
+  for (const target of s.units) {
+    if (
+      target.hp <= 0 ||
+      target.owner === u.owner ||
+      isAtPeace(s, u.owner, target.owner) ||
+      distance(u, target) > 1
+    )
+      continue;
+    const damage = applyDamage(
+      target,
+      Math.floor(combat(s, ship, target).damage / 2),
+    );
+    event(s, {
+      type: "attack",
+      player: u.owner,
+      unitId: u.id,
+      at: target,
+      damage,
+      message: "践踏伤害。",
+    });
+  }
+  removeDead(s, u);
+}
 function spawnGiant(s: GameState, c: City): void {
   const old = unitAt(s, c);
   if (old) {
@@ -1481,27 +1520,7 @@ export function applyAction(source: GameState, a: Action): ActionResult {
         at: { x: to.x, y: to.y },
         message: `${UNITS[u!.type].name}完成移动。`,
       });
-      if (oldType === "juggernaut" || u!.type === "juggernaut") {
-        const stomper = { ...u!, type: "juggernaut" as const };
-        for (const target of s.units.filter(
-          (t) =>
-            t.owner !== p.id &&
-            !isAtPeace(s, p.id, t.owner) &&
-            distance(t, u!) <= 1,
-        )) {
-          const damage = Math.floor(combat(s, stomper, target).damage / 2);
-          target.hp -= damage;
-          event(s, {
-            type: "attack",
-            player: p.id,
-            unitId: u!.id,
-            at: target,
-            damage,
-            message: "践踏伤害。",
-          });
-        }
-        removeDead(s, u!);
-      }
+      stompAfterMove(s, u!, oldType);
       break;
     }
     case "ATTACK": {
@@ -1519,25 +1538,25 @@ export function applyAction(source: GameState, a: Action): ActionResult {
       s.players[target.owner].embassies = s.players[
         target.owner
       ].embassies.filter((id) => id !== p.id);
-      target.hp -= result.damage;
-      u!.hp -= result.retaliation;
+      const damage = applyDamage(target, result.damage);
+      const retaliation = applyDamage(u!, result.retaliation);
       event(s, {
         type: "attack",
         player: p.id,
         unitId: u!.id,
         from: { x: u!.x, y: u!.y },
         at: { x: target.x, y: target.y },
-        damage: result.damage,
-        message: `造成 ${result.damage} 伤害，反击 ${result.retaliation}。`,
+        damage,
+        message: `造成 ${damage} 伤害，反击 ${retaliation}。`,
       });
-      if (result.retaliation)
+      if (retaliation)
         event(s, {
           type: "attack",
           player: target.owner,
           unitId: target.id,
           from: target,
           at: u!,
-          damage: result.retaliation,
+          damage: retaliation,
           message: "反击。",
         });
       if (skill(u!, "splash"))
@@ -1549,11 +1568,11 @@ export function applyAction(source: GameState, a: Action): ActionResult {
             distance(t, target) <= 1,
         )) {
           const original = source.units.find((t) => t.id === secondary.id)!;
-          const damage = Math.floor(
+          const splash = Math.floor(
             combat(source, source.units.find((t) => t.id === u!.id)!, original)
               .damage / 2,
           );
-          secondary.hp -= damage;
+          const damage = applyDamage(secondary, splash);
           event(s, {
             type: "attack",
             player: p.id,
@@ -1567,15 +1586,16 @@ export function applyAction(source: GameState, a: Action): ActionResult {
         if (skill(u!, "persist")) u!.attacked = false;
         if (
           UNITS[u!.type].range === 1 &&
-          !skill(u!, "stiff") &&
           Number.isFinite(movementCost(s, u!, tileAt(s, u!), tileAt(s, target)))
         ) {
           const from = tileAt(s, u!);
+          const previousType = u!.type;
           u!.x = target.x;
           u!.y = target.y;
           board(s, u!, from, tileAt(s, u!));
           u!.capturedTurn =
             cityAt(s, u!) && cityAt(s, u!)!.owner !== p.id ? s.round : null;
+          stompAfterMove(s, u!, previousType);
         }
       }
       if (u!.hp <= 0) {
@@ -1880,14 +1900,16 @@ export function applyAction(source: GameState, a: Action): ActionResult {
       const target = unitAt(s, c);
       if (target) {
         const attacker = { ...u!, hp: 5, maxHp: 5 };
-        target.hp -= combat(s, attacker, target).damage;
+        applyDamage(target, combat(s, attacker, target).damage);
         removeDead(s, u!);
       }
       s.units = s.units.filter((t) => t.id !== u!.id);
+      const spawnPriority = (tile: Tile) =>
+        tile.cityId === c.id ? 2 : Number(hasTerrainDefense(p, tile));
       const tiles = c.territory
         .map((id) => s.tiles[id])
         .filter((t) => !unitAt(s, t))
-        .sort((a, b) => Number(b.cityId === c.id) - Number(a.cityId === c.id));
+        .sort((a, b) => spawnPriority(b) - spawnPriority(a));
       for (const tile of tiles.slice(0, Math.min(5, c.level)))
         s.units.push(
           freshUnit(s, p.id, isWater(tile) ? "pirate" : "dagger", tile, ""),
@@ -2015,6 +2037,6 @@ export function getAvailableActions(
   for (const targetPlayer of p.metPlayers)
     for (const type of ["PEACE", "BREAK_PEACE", "EMBASSY"] as const)
       offer({ type, targetPlayer });
-  actions.push({ type: "END_TURN" });
+  offer({ type: "END_TURN" });
   return actions;
 }

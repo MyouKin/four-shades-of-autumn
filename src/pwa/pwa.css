@@ -5,7 +5,7 @@
   gap: 9px 13px;
   margin-top: 18px;
   pointer-events: auto;
-  font-size: 14px;
+  font-size: var(--font-size-small);
 }
 .pwa-status,
 .pwa-button {

@@ -12,6 +12,9 @@ assert.equal(manifest.start_url, "./");
 assert.equal(manifest.scope, "./");
 assert.equal(manifest.id, "./");
 assert.match(html, /rel="manifest"/);
+assert.equal(manifest.name, "西陆秋色 · Autumn in Surgea");
+assert.equal(manifest.short_name, "西陆秋色");
+assert.ok(html.includes(`<title>${manifest.name}</title>`));
 const entries = new Map();
 for (const match of worker.matchAll(/\{url:"([^"]+)",revision:(null|"[^"]+")\}/g)) {
   assert.ok(!/^(https?:|\/)/.test(match[1]), `Precache must work in a subdirectory: ${match[1]}`);
@@ -20,6 +23,15 @@ for (const match of worker.matchAll(/\{url:"([^"]+)",revision:(null|"[^"]+")\}/g
 }
 assert.ok(entries.has("index.html"), "HTML must be available on an offline cold start");
 assert.ok([...entries.keys()].some((file) => /^assets\/ai\.worker-.+\.js$/.test(file)), "AI worker is missing from offline cache");
+for (const font of ["genryu-dan", "resource-han-rounded-40"]) {
+  assert.ok(
+    [...entries.keys()].some((file) => file.startsWith(`assets/${font}-`) && file.endsWith(".woff2")),
+    `Missing offline font: ${font}`,
+  );
+}
+for (const license of ["genryu-OFL.txt", "resource-han-rounded-OFL.txt"]) {
+  assert.ok(entries.has(`licenses/${license}`), `Missing bundled font license: ${license}`);
+}
 for (const entry of await readdir(root, { recursive: true })) {
   const file = entry.split(path.sep).join("/");
   if (!/\.(js|css|html|png|svg|ico|json|webmanifest|woff2?|wasm|mp3|wav|ogg)$/.test(file)) continue;

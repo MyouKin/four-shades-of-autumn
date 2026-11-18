@@ -1,8 +1,8 @@
 import { UNITS } from "../data/config";
 import { distance } from "../map/generate";
-import { applyAction, canApplyAction, getUpgradeRewards, getVisibleResource } from "../rules/engine";
+import { applyAction, canApplyAction, getPendingUpgradeCity, getVisibleResource } from "../rules/engine";
 import type { Action, GameState, Unit } from "../types";
-import { chooseEconomic } from "./economy";
+import { chooseCityReward, chooseEconomic } from "./economy";
 import { buildThreatMap, incomingDamage, observe } from "./knowledge";
 import { defensiveOrders, navigationField } from "./navigation";
 import { AI_PROFILES, getAiBudget, getArmyTarget } from "./profiles";
@@ -12,8 +12,9 @@ export { AI_PROFILES, getAiBudget, getArmyTarget } from "./profiles";
 export interface AiDiagnostics {
   difficulty: GameState["options"]["difficulty"];
   budget: number;
-  /** Successful commands excluding the mandatory final END_TURN. */
+  /** Discretionary commands counted against the planning budget. */
   actionCount: number;
+  requiredRewardCount: number;
   unitCount: number;
   armyTarget: number;
   truncated: boolean;
@@ -36,7 +37,7 @@ export function runAiTurnDetailed(input: GameState, maxActions?: number): AiTurn
   const player = input.currentPlayer, profile = AI_PROFILES[input.options.difficulty];
   const diagnostics: AiDiagnostics = {
     difficulty: input.options.difficulty, budget: getAiBudget(input, maxActions),
-    actionCount: 0, unitCount: input.units.filter((u) => u.owner === player).length,
+    actionCount: 0, requiredRewardCount: 0, unitCount: input.units.filter((u) => u.owner === player).length,
     armyTarget: getArmyTarget(input), truncated: false, simulations: 0,
     phases: { military: 0, economy: 0, diplomacy: 0 },
   };
@@ -48,12 +49,15 @@ export function runAiTurnDetailed(input: GameState, maxActions?: number): AiTurn
     used: 0, limit: Math.min(profile.simulationLimit, 12 + Math.ceil(k.own.length * 1.5)),
   };
   const fields = new Map<string, Map<number, number>>();
-  const active = () => s.status === "playing" && s.currentPlayer === player && diagnostics.actionCount < diagnostics.budget;
+  const sameTurn = () => s.status === "playing" && s.currentPlayer === player;
+  const active = () => sameTurn() && diagnostics.actionCount < diagnostics.budget;
   const perform = (action: Action, phase: keyof AiDiagnostics["phases"] = "military"): boolean => {
-    if (!active()) return false;
+    if (!sameTurn() || (action.type !== "CITY_REWARD" && !active())) return false;
     const result = applyAction(s, action);
     if (!result.ok) return false;
-    s = result.state; actions.push(action); diagnostics.actionCount++; diagnostics.phases[phase]++;
+    s = result.state; actions.push(action); diagnostics.phases[phase]++;
+    if (action.type === "CITY_REWARD") diagnostics.requiredRewardCount++;
+    else diagnostics.actionCount++;
     k = observe(s);
     // Deaths need no expensive rebuild: risk estimation looks up live units.
     // Newly discovered enemies must immediately change the remaining orders.
@@ -64,6 +68,18 @@ export function runAiTurnDetailed(input: GameState, maxActions?: number): AiTurn
     if (action.type === "CAPTURE" || action.type === "RESEARCH") fields.clear();
     return true;
   };
+  const settleRewards = () => {
+    const queued = k.ownCities.reduce((count, city) => count + city.pendingRewardLevels.length, 0);
+    // A level-four reward, border expansion, trade links or a newly visible
+    // lighthouse can add levels. Allow a bounded margin for these chains.
+    const limit = queued * 2 + s.tiles.length * 4;
+    for (let i = 0; sameTurn(); i++) {
+      const city = getPendingUpgradeCity(s);
+      if (!city) return;
+      if (i >= limit || !perform(chooseCityReward(s, city, k, threats, profile), "economy"))
+        throw new Error("AI 未能完成城市升级。");
+    }
+  };
   for (const targetPlayer of s.players[player].peaceOffers) {
     const enemyPower = k.enemies.filter((e) => e.owner === targetPlayer).reduce((n, u) => n + u.hp, 0);
     const ownPower = k.own.reduce((n, u) => n + u.hp, 0);
@@ -73,11 +89,7 @@ export function runAiTurnDetailed(input: GameState, maxActions?: number): AiTurn
   }
   // Resolve free city rewards before ordering armies; a giant can join this
   // turn's unit pass and emergency walls protect the city immediately.
-  for (let i = 0; i < k.ownCities.length * 3 && active(); i++) {
-    if (!k.ownCities.some((c) => getUpgradeRewards(c).length)) break;
-    const reward = chooseEconomic(s, k, threats, profile);
-    if (reward?.type !== "CITY_REWARD" || !perform(reward, "economy")) break;
-  }
+  settleRewards();
   const guards = defensiveOrders(s, k, threats);
   let focus = profile.coordinated ? chooseFocus(k) : undefined;
   const priority = (u: Unit) => {
@@ -177,10 +189,13 @@ export function runAiTurnDetailed(input: GameState, maxActions?: number): AiTurn
   }
   diagnostics.truncated = diagnostics.actionCount >= diagnostics.budget;
   diagnostics.simulations = simulations.used;
-  if (s.status === "playing" && s.currentPlayer === player) {
+  settleRewards();
+  if (sameTurn()) {
     const end: Action = { type: "END_TURN" };
     const result = applyAction(s, end);
-    if (result.ok) { s = result.state; actions.push(end); }
+    if (!result.ok) throw new Error(result.error);
+    s = result.state;
+    actions.push(end);
   }
   return { state: s, actions, diagnostics };
 }
