@@ -1,0 +1,12 @@
+# Recreated by npm ci.
+node_modules/
+
+# Recreated by npm run build.
+/dist/
+*.tsbuildinfo
+
+# Local QA screenshots, generated saves and staging output.
+/artifacts/
+
+# macOS metadata.
+.DS_Store

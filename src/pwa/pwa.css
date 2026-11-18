@@ -1,0 +1,33 @@
+.pwa-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px 13px;
+  margin-top: 18px;
+  pointer-events: auto;
+  font-size: 14px;
+}
+.pwa-status,
+.pwa-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pwa-status {
+  color: var(--jade);
+}
+.pwa-button {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 12px;
+  min-height: 38px;
+  background: var(--paper);
+}
+.pwa-button:not(:disabled):hover {
+  background: #e8e2d3;
+}
+.pwa-message {
+  width: 100%;
+  line-height: 1.6;
+  color: var(--ink);
+}
